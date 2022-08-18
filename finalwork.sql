@@ -2,14 +2,14 @@ create schema restaurant;
 
 SET search_path TO restaurant;
 
----- ÑÎÇÄÀÍÈÅ ÒÀÁËÈÖ È ÒÐÈÃÅÐÎÂ ------
+---- СОЗДАНИЕ ТАБЛИЦ И ТРИГЕРОВ ------
 
----- ÑÎÒÐÓÄÍÈÊÈ -----
+---- СОТРУДНИКИ -----
 create table if not exists positions(
 	title_id serial primary key,
 	title_name varchar,
 	title_salary numeric,
-	work_hours int -- íîðìà ðàáî÷åãî âðåìåíè äëÿ äîëæíîñòè
+	work_hours int -- норма рабочего времени для должности
 );
 
 create table if not exists employees(
@@ -17,17 +17,17 @@ create table if not exists employees(
 	firstname varchar,
 	secondname varchar,
 	middlename varchar,
-	job_title int references positions -- äîëæíîñòü ñîòðóäíèêà
+	job_title int references positions -- должность сотрудника
 );
 
 create table if not exists time_sheet(
 	employee_id int references employees,
-	time_start timestamp, -- ôàêòè÷åñêîå íà÷àëî ðàáî÷åãî äíÿ
-	time_finish timestamp -- ôàêòè÷åñêîå îêîí÷àíèå ðàáî÷åãî äíÿ
+	time_start timestamp, -- фактическое начало рабочего дня
+	time_finish timestamp -- фактическое окончание рабочего дня
 );
 
 
----- ÌÅÍÞ ----
+---- МЕНЮ ----
 create table if not exists menu_level1(
 	menu_l1_id serial primary key,
 	menu_l1_name varchar unique);
@@ -43,7 +43,7 @@ create table if not exists menu_level2(
 	meal  int references meals (meal_id),
 	menu_l2_name varchar);	
 
----- ÇÀÊÀÇÛ ----
+---- ЗАКАЗЫ ----
 create table if not exists discounts(
 	discount_id serial primary key,
 	discount_sum numeric,
@@ -54,9 +54,9 @@ create table if not exists orders(
 	waiter int references employees (employee_id) not null,
 	order_date timestamp default current_timestamp,
 	discount int references discounts (discount_id) default 1,
-	status varchar default 'Çàêàç îòêðûò');
+	status varchar default 'Заказ открыт');
 
-create or replace trigger trigger_add_order_check_waiter --- çàêàç ìîæåò ñîçäàâàòü òîëüêî îôèöèàíò èëè àäìèíèñòðàòîð
+create or replace trigger trigger_add_order_check_waiter --- заказ может создавать только официант или администратор
 before insert on orders for each row execute function add_order_check_waiter_func();
 
 create or replace function add_order_check_waiter_func()
@@ -68,11 +68,11 @@ declare
 	employee_title varchar = (select p.title_name
 							  from employees e
 							  join positions p on p.title_id = e.job_title 
-							  where e.employee_id = new.waiter); -- óçíà¸ì äîëæíîñòü ðàáîòíèêà
+							  where e.employee_id = new.waiter); -- узнаём должность работника
 begin
-	if employee_title like 'Îôèöèàíò' then
+	if employee_title like 'Официант' then
 		return new;
-	elsif employee_title like 'Àäìèíèñòðàòîð' then
+	elsif employee_title like 'Администратор' then
 		return new;
 	else
 		return null;
@@ -94,7 +94,7 @@ create table if not exists bills(
 	date_paid timestamp default current_timestamp
 	);
 
-create or replace trigger trigger_upd_order_status --- îáíîâëåíèå ñòàòóñà çàêàçà
+create or replace trigger trigger_upd_order_status --- обновление статуса заказа
 after insert on bills for each row execute function upd_order_status_func();
 
 create or replace function upd_order_status_func()
@@ -103,12 +103,12 @@ language plpgsql
 as 
 $$
 begin
-	update orders set status = 'Ñ÷åò âûäàí äëÿ îïëàòû' where order_id = new.order_id;
+	update orders set status = 'Счет выдан для оплаты' where order_id = new.order_id;
 	return null;
 end
 $$
 
-create or replace procedure make_bill(order_number int) -- ïðîöåäóðà äëÿ ïå÷àòè ñ÷åòà äëÿ íîìåðà çàêàçà
+create or replace procedure make_bill(order_number int) -- процедура для печати счета для номера заказа
 language plpgsql
 as 
 $$
@@ -124,7 +124,7 @@ begin
 end
 $$
 
----- ÏÐÅÄÎÒÂÐÀÙÅÍÈÅ ÌÎØÅÍÍÈ×ÅÑÊÈÕ ÄÅÉÑÒÂÈÉ ----
+---- ПРЕДОТВРАЩЕНИЕ МОШЕННИЧЕСКИХ ДЕЙСТВИЙ ----
 create table if not exists frauds(
 	fraud_id serial primary key,
 	fraud_user varchar,
@@ -132,7 +132,7 @@ create table if not exists frauds(
 	action_text varchar
 	);
 
-create or replace trigger trigger_upd_orders_discount --- îáíîâëåíèå ñêèäêè â çàêàçå
+create or replace trigger trigger_upd_orders_discount --- обновление скидки в заказе
 before update on orders for each row execute function upd_orders_discount_func();
 
 create or replace function upd_orders_discount_func()
@@ -141,8 +141,8 @@ language plpgsql
 as 
 $$
 begin
-	if old.status like 'Ñ÷åò âûäàí äëÿ îïëàòû' then
-		insert into frauds(fraud_user, action_text) values (current_user, 'Ïîïûòêà èçìåíèòü çàêðûòûé çàêàç ' || new);
+	if old.status like 'Счет выдан для оплаты' then
+		insert into frauds(fraud_user, action_text) values (current_user, 'Попытка изменить закрытый заказ ' || new);
 		return null;
 	else
 		return new;
@@ -151,15 +151,15 @@ begin
 end
 $$
 
------ ÑÎÇÄÀÍÈÅ ÏÐÅÄÑÒÀÂËÅÍÈÉ ----
+----- СОЗДАНИЕ ПРЕДСТАВЛЕНИЙ ----
 
 create or replace view menu
 as
 select
-	ml.menu_l1_name "Íàçâàíèå ìåíþ",
-	ml2.menu_l2_name "Êàòåãîðèÿ",
-	m.meal_name "Íàçâàíèå áëþäà",
-	m.meal_cost "Öåíà áëþäà"
+	ml.menu_l1_name "Название меню",
+	ml2.menu_l2_name "Категория",
+	m.meal_name "Название блюда",
+	m.meal_cost "Цена блюда"
 from menu_level1 ml
 join menu_level2 ml2 on ml.menu_l1_id = ml2.menu_l1 
 join meals m on m.meal_id = ml2.meal
@@ -169,41 +169,41 @@ order by ml.menu_l1_name, ml2.menu_l2_name, m.meal_name;
 create or replace view open_orders
 as
 select distinct
-	o.order_id "Íîìåð çàêàçà",
-	o.order_date "Äàòà çàêàçà",
-	es."ÔÈÎ_ñîòðóäíèêà" "Îôèöèàíò",
-	d.discount_sum * 100  || ' % ñêèäêà ïî êàðòå ' || d.discount_name "Ñêèäêà",
-    m.meal_name "Áëþäî",
-    od.qty "Êîëè÷åñòâî",
-    ((m.meal_cost * od.qty) - (m.meal_cost * od.qty * d.discount_sum)) "Ñòîèìîñòü"
+	o.order_id "Номер заказа",
+	o.order_date "Дата заказа",
+	es."ФИО_сотрудника" "Официант",
+	d.discount_sum * 100  || ' % скидка по карте ' || d.discount_name "Скидка",
+    m.meal_name "Блюдо",
+    od.qty "Количество",
+    ((m.meal_cost * od.qty) - (m.meal_cost * od.qty * d.discount_sum)) "Стоимость"
 from orders o
 join orders_details od on o.order_id = od.order_id
 join meals m on m.meal_id = od.meal_id
-join employee_sheet es on o.waiter = es."Ëè÷íûé_íîìåð_ñîòðóäíèêà" 
+join employee_sheet es on o.waiter = es."Личный_номер_сотрудника" 
 join discounts d on d.discount_id = o.discount 
-where o.status like 'Çàêàç îòêðûò';
+where o.status like 'Заказ открыт';
 
 
 create or replace view close_orders
 as
 select distinct
-	o.order_id "Íîìåð çàêàçà",
-	o.order_date "Äàòà çàêàçà",
-	es."ÔÈÎ_ñîòðóäíèêà" "Îôèöèàíò",
-	sum(m.meal_cost * od.qty) over (partition by o.order_id) "Ñóììà çàêàçà",
-	sum(m.meal_cost * od.qty * d.discount_sum) over (partition by o.order_id) "Ñêèäêà",
-    sum((m.meal_cost * od.qty) - (m.meal_cost * od.qty * d.discount_sum)) over (partition by o.order_id) "Ïëàòåæè",
+	o.order_id "Номер заказа",
+	o.order_date "Дата заказа",
+	es."ФИО_сотрудника" "Официант",
+	sum(m.meal_cost * od.qty) over (partition by o.order_id) "Сумма заказа",
+	sum(m.meal_cost * od.qty * d.discount_sum) over (partition by o.order_id) "Скидка",
+    sum((m.meal_cost * od.qty) - (m.meal_cost * od.qty * d.discount_sum)) over (partition by o.order_id) "Платежи",
     (select sum(paid_amount) from bills where
     		   extract(day from current_timestamp) = extract(day from date_paid) 
 			   and extract(month from current_timestamp) = extract(month from date_paid)
-			   and extract(year from current_timestamp) = extract(year from date_paid)) "Îáùàÿ ñóììà âûðó÷êè çà ñåãîäíÿ"
+			   and extract(year from current_timestamp) = extract(year from date_paid)) "Общая сумма выручки за сегодня"
 from orders o
 join orders_details od on o.order_id = od.order_id
 join meals m on m.meal_id = od.meal_id
-join employee_sheet es on o.waiter = es."Ëè÷íûé_íîìåð_ñîòðóäíèêà" 
+join employee_sheet es on o.waiter = es."Личный_номер_сотрудника" 
 join discounts d on d.discount_id = o.discount 
 join bills b on o.order_id = b.order_id
-where o.status like 'Ñ÷åò âûäàí äëÿ îïëàòû' 
+where o.status like 'Счет выдан для оплаты' 
 			   and extract(day from current_timestamp) = extract(day from b.date_paid) 
 			   and extract(month from current_timestamp) = extract(month from b.date_paid)
 			   and extract(year from current_timestamp) = extract(year from b.date_paid);
@@ -212,8 +212,8 @@ where o.status like 'Ñ÷åò âûäàí äëÿ îïëàòû'
 create or replace view discounts_view
 as
 select
-	d.discount_sum * 100 || ' %' "Ñêèäêà",
-	d.discount_name "Íàçâàíèå ñêèäêè"
+	d.discount_sum * 100 || ' %' "Скидка",
+	d.discount_name "Название скидки"
 from discounts d
 where d.discount_sum  <> 0;
 
@@ -221,9 +221,9 @@ where d.discount_sum  <> 0;
 create or replace view employee_sheet
 as
 select
-	e.employee_id "Ëè÷íûé_íîìåð_ñîòðóäíèêà",
-	e.secondname ||' '|| e.firstname ||' '|| e.middlename "ÔÈÎ_ñîòðóäíèêà",
-	p.title_name "Äîëæíîñòü"
+	e.employee_id "Личный_номер_сотрудника",
+	e.secondname ||' '|| e.firstname ||' '|| e.middlename "ФИО_сотрудника",
+	p.title_name "Должность"
 from
 	employees e
 join positions p on p.title_id = e.job_title;
@@ -236,42 +236,42 @@ select distinct
 	sum(b.paid_amount) over (partition by o.waiter)
 	from bills b
 	join orders o2 on o2.order_id = b.order_id
-	where o2.waiter = o.waiter) "Ñóììà âûðó÷êè",
-	e.secondname ||' '|| e.firstname ||' '|| e.middlename "Ñîòðóäíèê"
+	where o2.waiter = o.waiter) "Сумма выручки",
+	e.secondname ||' '|| e.firstname ||' '|| e.middlename "Сотрудник"
 from orders o
 join bills b on b.order_id = o.order_id
 join employees e on e.employee_id = o.waiter
-order by "Ñóììà âûðó÷êè" desc;
+order by "Сумма выручки" desc;
 
 create or replace view staff_fraud
 as
 select
-	f.date_action "Äàòà äåéñòâèÿ",
-	f.fraud_user "Ïîëüçîâàòåëü",
-	f.action_text "Äåéñòâèå"
+	f.date_action "Дата действия",
+	f.fraud_user "Пользователь",
+	f.action_text "Действие"
 from frauds f
 order by f.date_action; 
 
 
------ ÍÀÏÎËÍÅÍÈÅ ÒÀÁËÈÖ -----
+----- НАПОЛНЕНИЕ ТАБЛИЦ -----
 
----- ÑÎÒÐÓÄÍÈÊÈ ----
+---- СОТРУДНИКИ ----
 insert into positions(
 	title_name,
 	title_salary,
 	work_hours
 )
 values 
-	('Äèðåêòîð', 100000, 8),
-	('Àäìèíèñòðàòîð', 70000, 12),
-	('Îôèöèàíò', 50000, 12),
-	('Óáîðùèê', 25000, 4),
-	('Îõðàííèê', 50000, 12),
-	('Ïîñóäîìîéùèê', 30000, 4),
-	('Êóðüåð', 40000, 8),
-	('Áóõãàëòåð', 55000, 8),
-	('Áàðìåí-êàññèð', 60000, 12),
-	('Ïîâàð', 58000, 12);
+	('Директор', 100000, 8),
+	('Администратор', 70000, 12),
+	('Официант', 50000, 12),
+	('Уборщик', 25000, 4),
+	('Охранник', 50000, 12),
+	('Посудомойщик', 30000, 4),
+	('Курьер', 40000, 8),
+	('Бухгалтер', 55000, 8),
+	('Бармен-кассир', 60000, 12),
+	('Повар', 58000, 12);
 
 insert into employees(	
 	firstname,
@@ -280,25 +280,25 @@ insert into employees(
 	job_title
 )
 values 
-	('Èâàí', 'Èâàíîâ', 'Èâàíîâè÷', 1),
-	('Ïåòð', 'Ïåòðîâ', 'Ïåòðîâè÷', 2),
-	('Ñåì¸í', 'Ñåì¸íîâ', 'Ñåì¸íîâè÷', 2),
-	('Ñèäîðîâ','Ìèõàèë','Ñåðãååâè÷', 3),
-	('Êîðøóíîâ','Ñåðãåé','Ìèõàéëîâè÷', 3),
-	('Áàáóðèí','Àëåêñàíäð','Àëåêñàíäðîâè÷', 3),
-	('Áàðàíîâ','Ô¸äîð','Ñòàíèñëàâîâè÷', 3),
-	('Áàðàø','Ñòàíèñëàâ','Âëàäèñëàâîâè÷',4),
-	('Áàõòèí','Âëàäèñëàâ','Èãîðåâè÷', 4),
-	('Âîëêîâ','Èãîðü','Ìèõàéëîâè÷', 5),
-	('Çàéöåâ','Ìèõàèë','Åâãåíüåâè÷', 5),
-	('Ãàãàðèí','Åâãåíèé','Ñåðãååâè÷', 6),
-	('Ïîëÿêîâ','Ìèðîñëàâ','Èâàíîâè÷', 6),
-	('Çàìÿòèí','Ñåðãåé','Ëåîíèäîâè÷', 7),
-	('Êàçàêîâ','Ëåîíèä','Èâàíîâè÷', 8),
-	('Êàòàåâ','Èâàí','Èâàíîâè÷', 9),
-	('ßðûãèí','Àëåêñàíäð','Ñåðãååâè÷', 9),
-	('Êî÷åðãèí','Àëåêñàíäð','Èâàíîâè÷', 10),
-	('Áåçðóêîâ','Àðò¸ì','Âèêòîðîâè÷', 10);
+	('Иван', 'Иванов', 'Иванович', 1),
+	('Петр', 'Петров', 'Петрович', 2),
+	('Семён', 'Семёнов', 'Семёнович', 2),
+	('Сидоров','Михаил','Сергеевич', 3),
+	('Коршунов','Сергей','Михайлович', 3),
+	('Бабурин','Александр','Александрович', 3),
+	('Баранов','Фёдор','Станиславович', 3),
+	('Бараш','Станислав','Владиславович',4),
+	('Бахтин','Владислав','Игоревич', 4),
+	('Волков','Игорь','Михайлович', 5),
+	('Зайцев','Михаил','Евгеньевич', 5),
+	('Гагарин','Евгений','Сергеевич', 6),
+	('Поляков','Мирослав','Иванович', 6),
+	('Замятин','Сергей','Леонидович', 7),
+	('Казаков','Леонид','Иванович', 8),
+	('Катаев','Иван','Иванович', 9),
+	('Ярыгин','Александр','Сергеевич', 9),
+	('Кочергин','Александр','Иванович', 10),
+	('Безруков','Артём','Викторович', 10);
 	
 insert into time_sheet(
 	employee_id,
@@ -441,58 +441,58 @@ values
 	(19, '2022-08-18 9:00', '2022-08-18 21:20');
 
 
------- ÌÅÍÞ -----
+------ МЕНЮ -----
 insert into menu_level1(
 	menu_l1_name
 )
 values 
-	('Îñíîâíîå'),
-	('Áèçíåñ-ëàí÷'),
-	('Áàðíàÿ êàðòà');
+	('Основное'),
+	('Бизнес-ланч'),
+	('Барная карта');
 	
 insert into meals(
 	meal_name,
 	meal_cost
 )
 values 
-	('Ñóï ãîðîõîâûé', 300),
-	('Îêðîøêà', 250),
-	('Áîðù', 350),
-    ('Ñîëÿíêà', 400),
-    ('Õàð÷î', 400),
-    ('Ðàãó îâîùíîå', 300),
-    ('Øíèöåëü èç ñâèíèíû', 350),
-    ('Êàðòîôåëü îòâàðíîé', 100),
-    ('Êàðòîôåëü ôðè', 150),
-    ('Ðèñ', 80),
-    ('Ìàêàðîíû', 70),
-    ('Ñàëàò öåçàðü', 450),
-    ('Ñàëàò ãðå÷åñêèé', 400),
-    ('Ñàëàò âèòàìèííûé', 200),
-    ('Ñàëàò ëåòíèé', 300),
-    ('Ñàëàò êðàáîâûé', 400),
-    ('Ïèðîã ñ êàðòîøêîé', 250),
-    ('Ïèðîã ñ êàïóñòîé', 250),
-    ('Ïèðîã ñ âèøíåé', 250),
-    ('Êîòëåòà ïî-êèåâñêè', 300),
-    ('Ñòåéê ðèáàé', 800),
-    ('Øàøëûê èç áàðàíèíû', 200),
-    ('Øàøëûê èç ñâèíèíû', 200),
-    ('Âîäêà', 250),
-    ('Äæèí', 250),
-    ('Âèñêè', 250),
-    ('Ñîê', 150),
-    ('×àé', 150),
-    ('Òåêèëà', 250),
-    ('Ðîì', 250),
-    ('Ìèíåðàëüíàÿ âîäà', 150),
-    ('Ìîðñ', 150),
-    ('Ãàçèðîâêà', 150),
-    ('Êðàñíîå ñóõîå', 300),
-    ('Êðàñíîå ïîëóñëàäêîå', 300),
-    ('Áåëîå ïîëóñëàäêîå', 300),
-    ('Áåëîå ñóõîå', 300),
-    ('Øàìïàíñêîå', 300);
+	('Суп гороховый', 300),
+	('Окрошка', 250),
+	('Борщ', 350),
+    ('Солянка', 400),
+    ('Харчо', 400),
+    ('Рагу овощное', 300),
+    ('Шницель из свинины', 350),
+    ('Картофель отварной', 100),
+    ('Картофель фри', 150),
+    ('Рис', 80),
+    ('Макароны', 70),
+    ('Салат цезарь', 450),
+    ('Салат греческий', 400),
+    ('Салат витаминный', 200),
+    ('Салат летний', 300),
+    ('Салат крабовый', 400),
+    ('Пирог с картошкой', 250),
+    ('Пирог с капустой', 250),
+    ('Пирог с вишней', 250),
+    ('Котлета по-киевски', 300),
+    ('Стейк рибай', 800),
+    ('Шашлык из баранины', 200),
+    ('Шашлык из свинины', 200),
+    ('Водка', 250),
+    ('Джин', 250),
+    ('Виски', 250),
+    ('Сок', 150),
+    ('Чай', 150),
+    ('Текила', 250),
+    ('Ром', 250),
+    ('Минеральная вода', 150),
+    ('Морс', 150),
+    ('Газировка', 150),
+    ('Красное сухое', 300),
+    ('Красное полусладкое', 300),
+    ('Белое полусладкое', 300),
+    ('Белое сухое', 300),
+    ('Шампанское', 300);
 
 insert into menu_level2(
 	menu_l1,
@@ -500,62 +500,62 @@ insert into menu_level2(
 	menu_l2_name
 	)	
 values 
-	(1, 1, 'Ñóïû'),
-	(1, 2, 'Ñóïû'),
-	(1, 3, 'Ñóïû'),
-	(1, 4, 'Ñóïû'),
-	(1, 5, 'Ñóïû'),
-	(1, 6, 'Âòîðûå áëþäà'),
-	(1, 7, 'Âòîðûå áëþäà'),
-	(1, 8, 'Âòîðûå áëþäà'),
-	(1, 9, 'Âòîðûå áëþäà'),
-	(1, 10, 'Âòîðûå áëþäà'),
-	(1, 11, 'Âòîðûå áëþäà'),
-	(1, 12, 'Ñàëàòû'),
-	(1, 13, 'Ñàëàòû'),
-	(1, 14, 'Ñàëàòû'),
-	(1, 15, 'Ñàëàòû'),
-	(1, 16, 'Ñàëàòû'),
-	(2, 1, 'Íàáîð 1'),
-	(2, 6, 'Íàáîð 1'),
-	(2, 7, 'Íàáîð 1'),
-	(2, 12, 'Íàáîð 1'),
-	(2, 28, 'Íàáîð 1'),
-	(2, 2, 'Íàáîð 2'),
-	(2, 8, 'Íàáîð 2'),
-	(2, 20, 'Íàáîð 2'),
-	(2, 15, 'Íàáîð 2'),
-	(2, 27, 'Íàáîð 2'),
-	(2, 3, 'Íàáîð 3'),
-	(2, 10, 'Íàáîð 3'),
-	(2, 23, 'Íàáîð 3'),
-	(2, 13, 'Íàáîð 3'),
-	(2, 27, 'Íàáîð 3'),
-	(3, 24, 'Êðåïêèå íàïèòêè'),
-	(3, 25, 'Êðåïêèå íàïèòêè'),
-	(3, 26, 'Êðåïêèå íàïèòêè'),
-	(3, 29, 'Êðåïêèå íàïèòêè'),
-	(3, 30, 'Êðåïêèå íàïèòêè'),
-	(3, 34, 'Âèíà'),
-	(3, 35, 'Âèíà'),
-	(3, 36, 'Âèíà'),
-	(3, 37, 'Âèíà'),
-	(3, 38, 'Âèíà'),
-	(3, 28, 'Áåçàëêîãîëüíûå íàïèòêè'),
-	(3, 27, 'Áåçàëêîãîëüíûå íàïèòêè'),
-	(3, 31, 'Áåçàëêîãîëüíûå íàïèòêè'),
-	(3, 32, 'Áåçàëêîãîëüíûå íàïèòêè'),
-	(3, 33, 'Áåçàëêîãîëüíûå íàïèòêè');
+	(1, 1, 'Супы'),
+	(1, 2, 'Супы'),
+	(1, 3, 'Супы'),
+	(1, 4, 'Супы'),
+	(1, 5, 'Супы'),
+	(1, 6, 'Вторые блюда'),
+	(1, 7, 'Вторые блюда'),
+	(1, 8, 'Вторые блюда'),
+	(1, 9, 'Вторые блюда'),
+	(1, 10, 'Вторые блюда'),
+	(1, 11, 'Вторые блюда'),
+	(1, 12, 'Салаты'),
+	(1, 13, 'Салаты'),
+	(1, 14, 'Салаты'),
+	(1, 15, 'Салаты'),
+	(1, 16, 'Салаты'),
+	(2, 1, 'Набор 1'),
+	(2, 6, 'Набор 1'),
+	(2, 7, 'Набор 1'),
+	(2, 12, 'Набор 1'),
+	(2, 28, 'Набор 1'),
+	(2, 2, 'Набор 2'),
+	(2, 8, 'Набор 2'),
+	(2, 20, 'Набор 2'),
+	(2, 15, 'Набор 2'),
+	(2, 27, 'Набор 2'),
+	(2, 3, 'Набор 3'),
+	(2, 10, 'Набор 3'),
+	(2, 23, 'Набор 3'),
+	(2, 13, 'Набор 3'),
+	(2, 27, 'Набор 3'),
+	(3, 24, 'Крепкие напитки'),
+	(3, 25, 'Крепкие напитки'),
+	(3, 26, 'Крепкие напитки'),
+	(3, 29, 'Крепкие напитки'),
+	(3, 30, 'Крепкие напитки'),
+	(3, 34, 'Вина'),
+	(3, 35, 'Вина'),
+	(3, 36, 'Вина'),
+	(3, 37, 'Вина'),
+	(3, 38, 'Вина'),
+	(3, 28, 'Безалкогольные напитки'),
+	(3, 27, 'Безалкогольные напитки'),
+	(3, 31, 'Безалкогольные напитки'),
+	(3, 32, 'Безалкогольные напитки'),
+	(3, 33, 'Безалкогольные напитки');
 
 
------- ÇÀÊÀÇÛ -----
+------ ЗАКАЗЫ -----
 insert into discounts(
 	discount_sum,
 	discount_name)
 values
-	(0, 'Áåç ñêèäêè'),
-	(0.10 , 'Ñåðåáðÿííûé êëèåíò'),
-	(0.15 , 'Çîëîòîé êëèåíò');
+	(0, 'Без скидки'),
+	(0.10 , 'Серебрянный клиент'),
+	(0.15 , 'Золотой клиент');
 
 insert into orders(
 	waiter,
@@ -634,4 +634,3 @@ call make_bill(1);
 
 
 update orders set discount = 3 where order_id = 8;
-
